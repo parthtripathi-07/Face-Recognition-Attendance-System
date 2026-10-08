@@ -1,0 +1,13 @@
+[
+  {
+    "_id": "app_settings",
+    "recognitionThreshold": 0.4,
+    "minFaceQuality": 0.6,
+    "instituteName": "FaceAttend AI Institute of Technology",
+    "academicSession": "2026-2027",
+    "timezone": "Asia/Kolkata",
+    "cooldownSeconds": 10,
+    "allowDuplicateSameDay": false,
+    "updatedAt": "2026-09-26T00:19:54.450177"
+  }
+]

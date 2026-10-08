@@ -1,0 +1,11 @@
+[
+  {
+    "_id": "6dbe69f5f64f4b0d8b6237f6679f1826",
+    "username": "admin",
+    "passwordHash": "$2b$12$4oqT2U7TwVFmP/JGBN6BNupKObAp13xuJJ4La4cNfwCwVjDmvA5CS",
+    "email": "admin@faceattend.ai",
+    "role": "admin",
+    "isDefaultDemo": true,
+    "createdAt": "2026-09-25T14:47:12.499604"
+  }
+]
