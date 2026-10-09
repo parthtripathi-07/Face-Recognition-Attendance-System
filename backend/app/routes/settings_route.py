@@ -17,6 +17,8 @@ class SettingsUpdatePayload(BaseModel):
     timezone: Optional[str] = None
     cooldownSeconds: Optional[int] = Field(None, ge=1, le=60)
     allowDuplicateSameDay: Optional[bool] = None
+    requireEyeBlink: Optional[bool] = Field(None, description="Require live eye blink to mark attendance")
+    livenessEnabled: Optional[bool] = Field(None, description="Enable anti-spoofing and liveness detection")
 
 DEFAULT_SETTINGS = {
     "_id": "app_settings",
@@ -26,7 +28,9 @@ DEFAULT_SETTINGS = {
     "academicSession": "2026-2027",
     "timezone": settings.TIMEZONE,
     "cooldownSeconds": settings.COOLDOWN_SECONDS,
-    "allowDuplicateSameDay": settings.ALLOW_DUPLICATE_SAME_DAY
+    "allowDuplicateSameDay": settings.ALLOW_DUPLICATE_SAME_DAY,
+    "requireEyeBlink": settings.REQUIRE_EYE_BLINK,
+    "livenessEnabled": settings.LIVENESS_ENABLED
 }
 
 @router.get("")
@@ -36,7 +40,9 @@ async def get_settings():
     if not current:
         await coll.insert_one(dict(DEFAULT_SETTINGS))
         return DEFAULT_SETTINGS
-    return current
+    merged = dict(DEFAULT_SETTINGS)
+    merged.update(current)
+    return merged
 
 @router.put("")
 async def update_settings(payload: SettingsUpdatePayload):
@@ -61,6 +67,12 @@ async def update_settings(payload: SettingsUpdatePayload):
     if payload.allowDuplicateSameDay is not None:
         update_data["allowDuplicateSameDay"] = payload.allowDuplicateSameDay
         settings.ALLOW_DUPLICATE_SAME_DAY = payload.allowDuplicateSameDay
+    if payload.requireEyeBlink is not None:
+        update_data["requireEyeBlink"] = payload.requireEyeBlink
+        settings.REQUIRE_EYE_BLINK = payload.requireEyeBlink
+    if payload.livenessEnabled is not None:
+        update_data["livenessEnabled"] = payload.livenessEnabled
+        settings.LIVENESS_ENABLED = payload.livenessEnabled
 
     if update_data:
         await coll.update_one({"_id": "app_settings"}, {"$set": update_data}, upsert=True)

@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.database import db_manager
-from app.services.attendance_service import attendance_service
+from app.services.attendance_service import attendance_service, AttendanceService
 from app.services.face_recognition import face_service
+from app.services.liveness_service import liveness_service
 
 logger = logging.getLogger("faceattend.routes.attendance")
 router = APIRouter(prefix="/api/attendance", tags=["Attendance"])
@@ -72,14 +73,67 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
             "results": []
         }
 
-    # Process each detected face
+    # Process each detected face with Liveness & Eye-Blink verification
     marked_students = []
     already_marked = []
+    awaiting_blink = []
+    spoof_detected = []
     unknown_faces = 0
 
+    date_str, _, _, _ = AttendanceService.get_server_datetime()
+    att_coll = db_manager["attendance"]
+
     for rec in recognition_results:
+        st_id = rec["student"]["id"] if rec.get("recognized") else None
+        liveness_data = liveness_service.process_face_liveness(img, rec, student_id=st_id)
+        rec["liveness"] = liveness_data
+
         if rec.get("recognized"):
             st = rec["student"]
+
+            # 1. Anti-Spoofing and Liveness Verification
+            if settings.LIVENESS_ENABLED:
+                if liveness_data.get("is_spoof"):
+                    spoof_detected.append({
+                        "student": st,
+                        "confidence": rec["confidence"],
+                        "confidencePercent": rec["confidencePercent"],
+                        "reason": liveness_data.get("spoof_reason"),
+                        "message": liveness_data.get("prompt"),
+                        "status": "spoof_rejected"
+                    })
+                    continue
+                elif settings.REQUIRE_EYE_BLINK and not liveness_data.get("is_live"):
+                    awaiting_blink.append({
+                        "student": st,
+                        "confidence": rec["confidence"],
+                        "confidencePercent": rec["confidencePercent"],
+                        "eyeState": liveness_data.get("eye_state"),
+                        "eyeOpenness": liveness_data.get("eye_openness"),
+                        "message": liveness_data.get("prompt"),
+                        "status": "awaiting_blink"
+                    })
+                    continue
+
+            # 2. Live Verification Passed: Check if already marked today
+            existing_query = {"studentId": st["id"], "date": date_str}
+            if payload.sessionId:
+                existing_query["sessionId"] = payload.sessionId
+            existing = await att_coll.find_one(existing_query)
+
+            if existing and not settings.ALLOW_DUPLICATE_SAME_DAY:
+                already_marked.append({
+                    "student": st,
+                    "confidence": rec["confidence"],
+                    "confidencePercent": rec["confidencePercent"],
+                    "markedAt": existing.get("time"),
+                    "liveness": "verified",
+                    "status": "already_marked",
+                    "message": f"Eye blink verified! But attendance already recorded today at {existing.get('time')}."
+                })
+                continue
+
+            # 3. Mark New Attendance!
             mark_res = await attendance_service.mark_attendance(
                 student_id=st["id"],
                 confidence=rec["confidence"],
@@ -91,14 +145,18 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                     "confidence": rec["confidence"],
                     "confidencePercent": rec["confidencePercent"],
                     "markedAt": mark_res["attendance"]["time"],
+                    "liveness": "verified",
                     "status": "marked"
                 })
             elif mark_res.get("status") == "already_marked":
                 already_marked.append({
                     "student": st,
                     "confidence": rec["confidence"],
+                    "confidencePercent": rec["confidencePercent"],
                     "markedAt": mark_res.get("markedAt"),
-                    "status": "already_marked"
+                    "liveness": "verified",
+                    "status": "already_marked",
+                    "message": f"Already marked today at {mark_res.get('markedAt')}."
                 })
         else:
             unknown_faces += 1
@@ -109,6 +167,8 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
         "markedCount": len(marked_students),
         "markedStudents": marked_students,
         "alreadyMarked": already_marked,
+        "awaitingBlink": awaiting_blink,
+        "spoofDetected": spoof_detected,
         "unknownCount": unknown_faces
     }
 
@@ -188,6 +248,33 @@ async def get_today_attendance():
         "absentToday": absent_today,
         "attendancePercentage": pct,
         "records": today_records
+    }
+
+@router.delete("/today")
+async def clear_today_attendance():
+    """Clear today's attendance records (for testing or reset)."""
+    att_coll = db_manager["attendance"]
+    date_str, _, _, _ = AttendanceService.get_server_datetime()
+    res = await att_coll.delete_many({"date": date_str})
+    return {
+        "success": True,
+        "deletedCount": res.deleted_count,
+        "message": f"Cleared {res.deleted_count} attendance records for today ({date_str})."
+    }
+
+@router.delete("/student/{student_id}/today")
+async def clear_student_today_attendance(student_id: str):
+    """Clear a single student's attendance for today so they can test check-in again."""
+    att_coll = db_manager["attendance"]
+    date_str, _, _, _ = AttendanceService.get_server_datetime()
+    res = await att_coll.delete_many({
+        "studentId": student_id.strip(),
+        "date": date_str
+    })
+    return {
+        "success": True,
+        "deletedCount": res.deleted_count,
+        "message": f"Reset today's attendance for student {student_id}."
     }
 
 @router.get("/student/{student_id}")

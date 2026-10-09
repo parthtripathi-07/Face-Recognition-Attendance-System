@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.database import db_manager
 from app.services.face_recognition import face_service
+from app.services.liveness_service import liveness_service
 
 logger = logging.getLogger("faceattend.recognition")
 router = APIRouter(prefix="/api/recognition", tags=["Face Recognition"])
@@ -31,6 +32,9 @@ async def recognize_face(payload: RecognizePayload):
 
     threshold = payload.threshold or settings.RECOGNITION_THRESHOLD
     results = face_service.recognize_frame(img, registered_faces, threshold=threshold)
+    for r in results:
+        st_id = r["student"]["id"] if r.get("recognized") else None
+        r["liveness"] = liveness_service.process_face_liveness(img, r, student_id=st_id)
 
     faces_detected = len(results)
     if faces_detected == 0:

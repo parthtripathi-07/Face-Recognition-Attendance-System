@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Camera, CheckCircle2, AlertTriangle, XCircle, Clock,
   UserCheck, Radio, Pause, Play, Volume2, VolumeX,
-  Users, ShieldCheck, PlusCircle, Scan,
+  Users, ShieldCheck, PlusCircle, Scan, Eye, ShieldAlert, RotateCcw
 } from 'lucide-react';
 import CameraView from '../components/CameraView';
 import { attendanceAPI } from '../services/api';
@@ -18,6 +18,18 @@ export default function LiveAttendancePage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const captureFrameFn = useRef(null);
   const scanningRef = useRef(isScanning);
+
+  const handleResetToday = async () => {
+    if (!window.confirm("Clear today's attendance records to re-test live eye blinking?")) return;
+    try {
+      await attendanceAPI.clearToday();
+      setCurrentRecognition(null);
+      setSessionLogs([]);
+      alert("Today's test attendance cleared! You can now blink to mark attendance fresh.");
+    } catch (e) {
+      alert("Failed to clear attendance: " + (e.response?.data?.detail || e.message));
+    }
+  };
 
   useEffect(() => {
     scanningRef.current = isScanning;
@@ -54,53 +66,77 @@ export default function LiveAttendancePage() {
     }
   };
 
+  const isProcessingRef = useRef(false);
+  const isMountedRef = useRef(true);
+
   useEffect(() => {
-    const interval = setInterval(async () => {
-      if (!scanningRef.current || isProcessing) return;
-      if (!captureFrameFn.current) return;
+    isMountedRef.current = true;
+    let timerId;
 
-      const frame = captureFrameFn.current();
-      if (!frame) return;
+    const scanFrame = async () => {
+      if (!isMountedRef.current || !scanningRef.current) return;
 
-      try {
-        setIsProcessing(true);
-        const res = await attendanceAPI.recognizeAndMark({
-          image: frame,
-          sessionId: activeSession?.sessionId,
-        });
-
-        const data = res.data;
-        setOverlayBoxes(data.results || []);
-
-        if (data.results && data.results.length > 0) {
-          const topFace = data.results[0];
-          setCurrentRecognition({
-            ...topFace,
-            markedStudents: data.markedStudents || [],
-            alreadyMarked: data.alreadyMarked || [],
-          });
-
-          if (data.markedStudents && data.markedStudents.length > 0) {
-            playChime();
-            setSessionLogs((prev) => {
-              const newEntries = data.markedStudents.filter(
-                (m) => !prev.some((p) => p.student.studentId === m.student.studentId)
-              );
-              return [...newEntries, ...prev];
+      if (!isProcessingRef.current && captureFrameFn.current) {
+        const frame = captureFrameFn.current();
+        if (frame) {
+          isProcessingRef.current = true;
+          setIsProcessing(true);
+          try {
+            const res = await attendanceAPI.recognizeAndMark({
+              image: frame,
+              sessionId: activeSession?.sessionId,
             });
-          }
-        } else {
-          setCurrentRecognition(null);
-        }
-      } catch (err) {
-        console.warn('Recognition frame error:', err);
-      } finally {
-        setIsProcessing(false);
-      }
-    }, 650);
 
-    return () => clearInterval(interval);
-  }, [activeSession, isProcessing, soundEnabled]);
+            const data = res.data;
+            if (isMountedRef.current) {
+              setOverlayBoxes(data.results || []);
+
+              if (data.results && data.results.length > 0) {
+                const topFace = data.results[0];
+                setCurrentRecognition({
+                  ...topFace,
+                  markedStudents: data.markedStudents || [],
+                  alreadyMarked: data.alreadyMarked || [],
+                  awaitingBlink: data.awaitingBlink || [],
+                  spoofDetected: data.spoofDetected || [],
+                });
+
+                if (data.markedStudents && data.markedStudents.length > 0) {
+                  playChime();
+                  setSessionLogs((prev) => {
+                    const newEntries = data.markedStudents.filter(
+                      (m) => !prev.some((p) => p.student.studentId === m.student.studentId)
+                    );
+                    return [...newEntries, ...prev];
+                  });
+                }
+              } else {
+                setCurrentRecognition(null);
+              }
+            }
+          } catch (err) {
+            console.warn('Recognition frame error:', err);
+          } finally {
+            isProcessingRef.current = false;
+            if (isMountedRef.current) {
+              setIsProcessing(false);
+            }
+          }
+        }
+      }
+
+      if (isMountedRef.current && scanningRef.current) {
+        timerId = setTimeout(scanFrame, 160);
+      }
+    };
+
+    timerId = setTimeout(scanFrame, 150);
+
+    return () => {
+      isMountedRef.current = false;
+      clearTimeout(timerId);
+    };
+  }, [activeSession?.sessionId, soundEnabled]);
 
   return (
     <div className="space-y-6">
@@ -119,6 +155,14 @@ export default function LiveAttendancePage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleResetToday}
+            title="Clear today's attendance to re-test eye blinking"
+            className="flex items-center gap-1.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 transition"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Reset Today (Test)</span>
+          </button>
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
             title={soundEnabled ? 'Mute Chimes' : 'Enable Chimes'}
@@ -268,15 +312,34 @@ export default function LiveAttendancePage() {
 
               <div className="mt-4 pt-3 border-t border-slate-200/60 dark:border-slate-800/60 flex items-center justify-between text-xs font-semibold">
                 {currentRecognition.markedStudents?.length > 0 ? (
-                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 font-bold">
                     <CheckCircle2 className="h-4 w-4" />
-                    <span>Attendance Marked at {currentRecognition.markedStudents[0].markedAt}</span>
+                    <span>Attendance Marked at {currentRecognition.markedStudents[0].markedAt} (Live Eye Blink Confirmed)</span>
+                  </span>
+                ) : currentRecognition.spoofDetected?.length > 0 ? (
+                  <span className="text-rose-600 dark:text-rose-400 flex items-center gap-1.5 font-bold">
+                    <ShieldAlert className="h-4 w-4" />
+                    <span>Photo Spoof Detected (Rejected - Live Student Required)</span>
+                  </span>
+                ) : currentRecognition.awaitingBlink?.length > 0 ? (
+                  <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-bold animate-pulse">
+                    <Eye className="h-4 w-4" />
+                    <span>Live Check: Please blink your eyes naturally (Palak jhapkayen)</span>
                   </span>
                 ) : currentRecognition.alreadyMarked?.length > 0 ? (
-                  <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
-                    <Clock className="h-4 w-4" />
-                    <span>Already Marked Today (at {currentRecognition.alreadyMarked[0].markedAt})</span>
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-semibold">
+                      <Clock className="h-4 w-4" />
+                      <span>Live Verified! Already Marked Today at {currentRecognition.alreadyMarked[0].markedAt}</span>
+                    </span>
+                    <button
+                      onClick={handleResetToday}
+                      className="rounded-lg bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-500/30 transition"
+                      title="Clear today's attendance to test again"
+                    >
+                      Reset Today to Retest
+                    </button>
+                  </div>
                 ) : (
                   <span className="text-slate-400">
                     {currentRecognition.recognized ? 'Verification in progress...' : 'Attendance not marked'}

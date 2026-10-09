@@ -9,8 +9,9 @@ import {
   AlertCircle,
   Clock,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react';
-import { settingsAPI, authAPI } from '../services/api';
+import { settingsAPI, authAPI, attendanceAPI } from '../services/api';
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
@@ -65,6 +66,23 @@ export default function SettingsPage() {
       alert('Failed to update settings.');
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const [clearingToday, setClearingToday] = useState(false);
+  const [clearSuccess, setClearSuccess] = useState('');
+
+  const handleClearToday = async () => {
+    if (!window.confirm("Are you sure you want to delete all attendance records for today? This will let you test marking and eye blinking fresh.")) return;
+    try {
+      setClearingToday(true);
+      const res = await attendanceAPI.clearToday();
+      setClearSuccess(res.data?.message || "Today's attendance records cleared successfully.");
+      setTimeout(() => setClearSuccess(''), 4000);
+    } catch (err) {
+      alert("Failed to clear attendance: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setClearingToday(false);
     }
   };
 
@@ -178,16 +196,71 @@ export default function SettingsPage() {
               />
             </div>
 
-            <div className="pt-2">
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={settings.allowDuplicateSameDay}
-                  onChange={(e) => setSettings({ ...settings, allowDuplicateSameDay: e.target.checked })}
-                  className="rounded border-slate-300 text-sky-600 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800"
-                />
-                <span>Allow multiple attendance check-ins on same day</span>
-              </label>
+            <div className="pt-2 space-y-3 border-t border-slate-100 dark:border-slate-800">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-800 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={settings.requireEyeBlink ?? true}
+                    onChange={(e) => setSettings({ ...settings, requireEyeBlink: e.target.checked })}
+                    className="rounded border-slate-300 text-sky-600 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <span>Require Live Eye Blink Verification</span>
+                  <span className="rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 text-[10px] font-bold">
+                    Anti-Photo
+                  </span>
+                </label>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-6 mt-0.5">
+                  Real student must blink their eyes naturally. Prevents attendance fraud using static photos.
+                </p>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-800 dark:text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={settings.livenessEnabled ?? true}
+                    onChange={(e) => setSettings({ ...settings, livenessEnabled: e.target.checked })}
+                    className="rounded border-slate-300 text-sky-600 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <span>Enable Anti-Screen & Glare Detection</span>
+                </label>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-6 mt-0.5">
+                  Rejects mobile screens and tablets displaying photos or digital replays.
+                </p>
+              </div>
+
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={settings.allowDuplicateSameDay}
+                    onChange={(e) => setSettings({ ...settings, allowDuplicateSameDay: e.target.checked })}
+                    className="rounded border-slate-300 text-sky-600 focus:ring-sky-500 dark:border-slate-700 dark:bg-slate-800"
+                  />
+                  <span>Allow multiple attendance check-ins on same day (Testing Mode)</span>
+                </label>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 pl-6 mt-0.5">
+                  When enabled, students can mark attendance repeatedly on the same day for testing eye blinks.
+                </p>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={handleClearToday}
+                  disabled={clearingToday}
+                  className="flex items-center justify-center gap-2 w-full rounded-xl border border-amber-500/40 bg-amber-500/10 py-2.5 px-3 text-xs font-bold text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 transition disabled:opacity-50"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>{clearingToday ? 'Clearing Today...' : "Clear Today's Attendance (Reset for Testing)"}</span>
+                </button>
+                {clearSuccess && (
+                  <p className="mt-1 text-center text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                    {clearSuccess}
+                  </p>
+                )}
+              </div>
             </div>
 
             <button

@@ -209,13 +209,29 @@ class PostgresCollection:
 
     async def delete_one(self, filter_dict: Dict[str, Any]):
         existing = await self.find_one(filter_dict)
+        count = 0
         if existing:
             doc_id = existing.get("_id")
             async with self.pool.acquire() as conn:
                 await conn.execute(f"DELETE FROM {self.table_name} WHERE id = $1", doc_id)
+                count = 1
+
+        class DeleteResult:
+            deleted_count = count
+        return DeleteResult()
 
     async def delete_many(self, filter_dict: Dict[str, Any]):
         where_clause, params = build_where_clause(filter_dict)
         query = f"DELETE FROM {self.table_name} WHERE {where_clause}"
+        count = 0
         async with self.pool.acquire() as conn:
-            await conn.execute(query, *params)
+            status = await conn.execute(query, *params)
+            if status and "DELETE" in status:
+                try:
+                    count = int(status.split()[-1])
+                except Exception:
+                    pass
+
+        class DeleteResult:
+            deleted_count = count
+        return DeleteResult()

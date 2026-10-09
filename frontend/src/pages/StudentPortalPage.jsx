@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   ScanFace, Camera, Search, CheckCircle2, AlertCircle, Clock,
   User, ShieldCheck, Lock, ArrowRight, RefreshCw, Volume2, VolumeX,
-  Sparkles, Check, AlertTriangle, Building2, Calendar, Radio
+  Sparkles, Check, AlertTriangle, Building2, Calendar, Radio, Eye, ShieldAlert
 } from 'lucide-react';
 import CameraView from '../components/CameraView';
 import { attendanceAPI } from '../services/api';
@@ -78,63 +78,100 @@ export default function StudentPortalPage() {
     } catch (e) {}
   };
 
-  // Continuous Camera Recognition Loop (Every 650ms)
+  const isProcessingRef = useRef(false);
+  const isMountedRef = useRef(true);
+
+  // Fast Adaptive Camera Recognition Loop (~160ms delay)
   useEffect(() => {
     if (activeTab !== 'camera') return;
+    isMountedRef.current = true;
+    let timerId;
 
-    const interval = setInterval(async () => {
-      if (isProcessing) return;
-      if (!captureFrameFn.current) return;
+    const scanFrame = async () => {
+      if (!isMountedRef.current || activeTab !== 'camera') return;
 
-      const frame = captureFrameFn.current();
-      if (!frame) return;
-
-      try {
-        setIsProcessing(true);
-        const res = await attendanceAPI.recognizeAndMark({
-          image: frame,
-          sessionId: activeSession?.sessionId,
-        });
-
-        const data = res.data;
-        setOverlayBoxes(data.results || []);
-
-        if (data.results && data.results.length > 0) {
-          const topFace = data.results[0];
-          const hasMarked = data.markedStudents && data.markedStudents.length > 0;
-          const hasAlready = data.alreadyMarked && data.alreadyMarked.length > 0;
-
-          if (hasMarked) {
-            playChime();
-            setLastRecognition({
-              type: 'marked',
-              student: data.markedStudents[0].student,
-              time: data.markedStudents[0].markedAt,
-              confidence: data.markedStudents[0].confidencePercent || Math.round((data.markedStudents[0].confidence || 0) * 100),
+      if (!isProcessingRef.current && captureFrameFn.current) {
+        const frame = captureFrameFn.current();
+        if (frame) {
+          isProcessingRef.current = true;
+          setIsProcessing(true);
+          try {
+            const res = await attendanceAPI.recognizeAndMark({
+              image: frame,
+              sessionId: activeSession?.sessionId,
             });
-          } else if (hasAlready) {
-            setLastRecognition({
-              type: 'already',
-              student: data.alreadyMarked[0].student,
-              time: data.alreadyMarked[0].markedAt,
-              confidence: Math.round((data.alreadyMarked[0].confidence || 0) * 100),
-            });
-          } else if (!topFace.recognized) {
-            setLastRecognition({
-              type: 'unknown',
-              message: 'Face detected, but not registered in student directory.',
-            });
+
+            const data = res.data;
+            if (isMountedRef.current) {
+              setOverlayBoxes(data.results || []);
+
+              if (data.results && data.results.length > 0) {
+                const topFace = data.results[0];
+                const hasMarked = data.markedStudents && data.markedStudents.length > 0;
+                const hasAlready = data.alreadyMarked && data.alreadyMarked.length > 0;
+                const hasSpoof = data.spoofDetected && data.spoofDetected.length > 0;
+                const hasAwaitingBlink = data.awaitingBlink && data.awaitingBlink.length > 0;
+
+                if (hasMarked) {
+                  playChime();
+                  setLastRecognition({
+                    type: 'marked',
+                    student: data.markedStudents[0].student,
+                    time: data.markedStudents[0].markedAt,
+                    confidence: data.markedStudents[0].confidencePercent || Math.round((data.markedStudents[0].confidence || 0) * 100),
+                  });
+                } else if (hasSpoof) {
+                  setLastRecognition({
+                    type: 'spoof',
+                    student: data.spoofDetected[0].student,
+                    message: data.spoofDetected[0].message || 'Photo or Screen Spoof Detected!',
+                  });
+                } else if (hasAwaitingBlink) {
+                  setLastRecognition({
+                    type: 'awaiting_blink',
+                    student: data.awaitingBlink[0].student,
+                    message: data.awaitingBlink[0].message || 'Please blink your eyes naturally.',
+                    eyeState: data.awaitingBlink[0].eyeState,
+                  });
+                } else if (hasAlready) {
+                  setLastRecognition({
+                    type: 'already',
+                    student: data.alreadyMarked[0].student,
+                    time: data.alreadyMarked[0].markedAt,
+                    confidence: Math.round((data.alreadyMarked[0].confidence || 0) * 100),
+                    message: data.alreadyMarked[0].message,
+                  });
+                } else if (!topFace.recognized) {
+                  setLastRecognition({
+                    type: 'unknown',
+                    message: 'Face detected, but not registered in student directory.',
+                  });
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('Student scan error:', err);
+          } finally {
+            isProcessingRef.current = false;
+            if (isMountedRef.current) {
+              setIsProcessing(false);
+            }
           }
         }
-      } catch (err) {
-        console.warn('Student scan error:', err);
-      } finally {
-        setIsProcessing(false);
       }
-    }, 650);
 
-    return () => clearInterval(interval);
-  }, [activeTab, activeSession, isProcessing, soundEnabled]);
+      if (isMountedRef.current && activeTab === 'camera') {
+        timerId = setTimeout(scanFrame, 160);
+      }
+    };
+
+    timerId = setTimeout(scanFrame, 150);
+
+    return () => {
+      isMountedRef.current = false;
+      clearTimeout(timerId);
+    };
+  }, [activeTab, activeSession?.sessionId, soundEnabled]);
 
   // Handle Roll Number Status Check ("Laga Ki Nahi")
   const handleCheckStatus = async (e) => {
@@ -332,7 +369,7 @@ export default function StudentPortalPage() {
                       </div>
                       <div>
                         <span className="rounded bg-amber-200/80 dark:bg-amber-900 px-2 py-0.5 text-[10px] font-black uppercase text-amber-900 dark:text-amber-200">
-                          ALREADY MARKED TODAY ??
+                          ALREADY MARKED TODAY
                         </span>
                         <h4 className="text-base font-extrabold text-slate-900 dark:text-white mt-1">
                           {lastRecognition.student.name}
@@ -340,9 +377,70 @@ export default function StudentPortalPage() {
                       </div>
                     </div>
 
-                    <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed pt-2 border-t border-amber-500/20">
-                      Your attendance is already recorded for today at <span className="font-bold">{lastRecognition.time}</span>. You do not need to scan again.
-                    </p>
+                    <div className="pt-2 border-t border-amber-500/20 text-xs space-y-2">
+                      <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+                        {lastRecognition.message || `Live Eye Blink Verified! Your attendance was already recorded today at ${lastRecognition.time}.`}
+                      </p>
+                      <div className="flex items-center justify-between text-[11px] text-amber-700 dark:text-amber-400 font-medium pt-1">
+                        <span>Roll: {lastRecognition.student.rollNumber}</span>
+                        <span>Recorded at {lastRecognition.time}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {lastRecognition?.type === 'awaiting_blink' && (
+                  <div className="rounded-2xl border-2 border-amber-400 bg-amber-50/90 dark:bg-amber-950/50 p-5 text-amber-900 dark:text-amber-200 space-y-3 animate-fadeIn shadow-lg shadow-amber-500/10">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500 text-white font-bold text-lg shadow-md shadow-amber-500/30 animate-pulse">
+                        <Eye className="h-7 w-7" />
+                      </div>
+                      <div>
+                        <span className="rounded bg-amber-200/90 dark:bg-amber-900 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                          LIVE CHECK: PLEASE BLINK (PALAK JHAPKAYEN)
+                        </span>
+                        <h4 className="text-base font-extrabold text-slate-900 dark:text-white mt-1">
+                          {lastRecognition.student?.name}
+                        </h4>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-amber-500/20 text-xs space-y-2">
+                      <p className="text-amber-800 dark:text-amber-300 font-medium leading-relaxed">
+                        Photo se attendance rokne ke liye: <strong>Camera ke samne ek baar palak jhapkayen (Blink your eyes)</strong>.
+                      </p>
+                      <div className="flex items-center gap-2 text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-900/50 px-3 py-1.5 rounded-xl">
+                        <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+                        <span>Eye Detection: Waiting for natural blink...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {lastRecognition?.type === 'spoof' && (
+                  <div className="rounded-2xl border-2 border-rose-500 bg-rose-50/90 dark:bg-rose-950/50 p-5 text-rose-900 dark:text-rose-200 space-y-3 animate-fadeIn shadow-lg shadow-rose-500/15">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-600 text-white font-bold text-lg shadow-md shadow-rose-600/30">
+                        <ShieldAlert className="h-7 w-7" />
+                      </div>
+                      <div>
+                        <span className="rounded bg-rose-200 dark:bg-rose-900 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-rose-900 dark:text-rose-200">
+                          PHOTO SPOOF DETECTED
+                        </span>
+                        <h4 className="text-base font-extrabold text-slate-900 dark:text-white mt-1">
+                          Photo Attendance Rejected
+                        </h4>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-rose-500/20 text-xs space-y-1.5">
+                      <p className="text-rose-800 dark:text-rose-300 font-semibold leading-relaxed">
+                        {lastRecognition.message || 'Static photo or screen detected. Photo se attendance nahi lagegi!'}
+                      </p>
+                      <p className="text-[11px] text-rose-700/80 dark:text-rose-400">
+                        Asli student ko camera ke samne aakar live natural blink karna anivarya hai.
+                      </p>
+                    </div>
                   </div>
                 )}
 

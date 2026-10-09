@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     ALLOW_DUPLICATE_SAME_DAY: bool = False
     TIMEZONE: str = 'Asia/Kolkata'
 
+    # Anti-Spoofing & Liveness
+    REQUIRE_EYE_BLINK: bool = True
+    LIVENESS_ENABLED: bool = True
+
     BASE_DIR: Path = BASE_DIR
     DATA_DIR: Path = DATA_DIR
     MODELS_DIR: Path = MODELS_DIR
