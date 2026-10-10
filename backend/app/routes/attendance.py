@@ -110,18 +110,22 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                         "confidencePercent": rec["confidencePercent"],
                         "eyeState": liveness_data.get("eye_state"),
                         "eyeOpenness": liveness_data.get("eye_openness"),
+                        "blinksCount": liveness_data.get("blinks_count", 0),
+                        "requiredBlinks": liveness_data.get("required_blinks", 2),
+                        "livenessStatus": liveness_data.get("liveness_status"),
                         "message": liveness_data.get("prompt"),
                         "status": "awaiting_blink"
                     })
                     continue
 
-            # 2. Live Verification Passed: Check if already marked today
+            # 2. Live 2-Blink Verification Passed: Check if already marked today
             existing_query = {"studentId": st["id"], "date": date_str}
             if payload.sessionId:
                 existing_query["sessionId"] = payload.sessionId
             existing = await att_coll.find_one(existing_query)
 
             if existing and not settings.ALLOW_DUPLICATE_SAME_DAY:
+                liveness_service.reset_student_tracker(st["id"])
                 already_marked.append({
                     "student": st,
                     "confidence": rec["confidence"],
@@ -129,7 +133,7 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                     "markedAt": existing.get("time"),
                     "liveness": "verified",
                     "status": "already_marked",
-                    "message": f"Eye blink verified! But attendance already recorded today at {existing.get('time')}."
+                    "message": f"2 Eye blinks verified! But attendance already recorded today at {existing.get('time')}."
                 })
                 continue
 
@@ -139,6 +143,9 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                 confidence=rec["confidence"],
                 session_id=payload.sessionId
             )
+            # Reset tracker so no photo can reuse previous verification
+            liveness_service.reset_student_tracker(st["id"])
+
             if mark_res.get("success"):
                 marked_students.append({
                     "student": st,

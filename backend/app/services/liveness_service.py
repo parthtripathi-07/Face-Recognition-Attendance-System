@@ -8,21 +8,31 @@ logger = logging.getLogger("faceattend.liveness")
 
 class LivenessService:
     """
-    Multi-layer Anti-Spoofing and Active Eye-Blink Verification Service.
-    Prevents attendance fraud using printed photos, mobile phone screens, or digital replays.
-    Requires a genuine live student to blink naturally before attendance is recorded.
+    Multi-layer Anti-Spoofing and Active Dual Eye-Blink Verification Service.
+    Strictly requires 2 complete, distinct eye blinks before attendance is marked.
+    Completely blocks printed photos, phone screens, and digital replays.
     """
+    REQUIRED_BLINKS = 2
+
     def __init__(self):
         # In-memory tracking per studentId / face: { student_id: tracker_state }
         self._trackers: Dict[str, Dict[str, Any]] = {}
         self.cleanup_interval = 60.0
         self._last_cleanup = time.time()
 
+    def reset_student_tracker(self, student_id: str):
+        """Immediately resets a student's blink tracking state (e.g. after attendance is marked)."""
+        if not student_id:
+            return
+        if student_id in self._trackers:
+            self._trackers.pop(student_id, None)
+            logger.info(f"Liveness tracker reset for student {student_id}.")
+
     def _cleanup_old_trackers(self):
         now = time.time()
         if now - self._last_cleanup < self.cleanup_interval:
             return
-        expired = [sid for sid, data in self._trackers.items() if (now - data.get('last_seen', 0)) > 45.0]
+        expired = [sid for sid, data in self._trackers.items() if (now - data.get('last_seen', 0)) > 40.0]
         for sid in expired:
             self._trackers.pop(sid, None)
         self._last_cleanup = now
@@ -129,7 +139,6 @@ class LivenessService:
     def analyze_texture_and_spoof(self, image: np.ndarray, bbox: List[int]) -> Dict[str, Any]:
         """
         Checks for bright specular screen glare (mobile phone or tablet glass reflection).
-        Only flags screen glare if specular reflection exceeds high threshold.
         """
         x, y, w, h = bbox
         img_h, img_w = image.shape[:2]
@@ -148,8 +157,8 @@ class LivenessService:
         glare_mask = (hsv[:, :, 2] > 252) & (hsv[:, :, 1] < 18)
         glare_ratio = float(np.sum(glare_mask)) / float(crop.shape[0] * crop.shape[1])
 
-        # Phone screen glare typically covers > 12% of the crop
-        is_glare_spoof = glare_ratio > 0.12
+        # Phone screen glare typically covers > 9% of the face crop
+        is_glare_spoof = glare_ratio > 0.09
 
         return {
             'spoof_detected': is_glare_spoof,
@@ -165,6 +174,7 @@ class LivenessService:
     ) -> Dict[str, Any]:
         """
         Master liveness evaluation for a detected face.
+        STRICTLY requires 2 distinct eye blinks before returning verified = True.
         """
         self._cleanup_old_trackers()
 
@@ -180,11 +190,13 @@ class LivenessService:
             return {
                 'is_live': False,
                 'liveness_status': 'spoof_detected',
+                'blinks_count': 0,
+                'required_blinks': self.REQUIRED_BLINKS,
                 'eye_state': eye_state.lower(),
                 'eye_openness': openness,
                 'is_spoof': True,
                 'spoof_reason': 'screen_glare',
-                'prompt': 'Screen reflection detected! Live student face required (Digital screen not allowed).',
+                'prompt': 'Screen reflection detected! Live student face required (Mobile screen not allowed).',
                 'blink_verified': False
             }
 
@@ -197,31 +209,40 @@ class LivenessService:
                 'created_at': now,
                 'last_seen': now,
                 'history': [],
-                'blink_verified': False,
+                'blinks_count': 0,
+                'stage': 'WAITING_BLINK_1',
+                'blink_1_time': 0.0,
+                'blink_2_time': 0.0,
                 'verified_at': 0.0,
+                'blink_verified': False,
             }
 
         tracker = self._trackers[track_key]
         tracker['last_seen'] = now
 
-        # If already verified in the last 15 seconds, maintain verified status
-        if tracker['blink_verified'] and (now - tracker.get('verified_at', 0)) < 15.0:
-            return {
-                'is_live': True,
-                'liveness_status': 'verified',
-                'eye_state': 'verified',
-                'eye_openness': openness,
-                'is_spoof': False,
-                'spoof_reason': None,
-                'prompt': 'Live student verified! (Eye blink confirmed)',
-                'blink_verified': True
-            }
-        elif tracker['blink_verified'] and (now - tracker.get('verified_at', 0)) >= 15.0:
-            # Expire verification so student blinks next time
-            tracker['blink_verified'] = False
-            tracker['history'] = []
+        # Expiration for verified status: valid only for 3.5 seconds
+        if tracker['blink_verified']:
+            if (now - tracker.get('verified_at', 0)) < 3.5:
+                return {
+                    'is_live': True,
+                    'liveness_status': 'verified',
+                    'blinks_count': 2,
+                    'required_blinks': self.REQUIRED_BLINKS,
+                    'eye_state': 'verified',
+                    'eye_openness': openness,
+                    'is_spoof': False,
+                    'spoof_reason': None,
+                    'prompt': '2 blinks verified! Attendance confirmed.',
+                    'blink_verified': True
+                }
+            else:
+                # Expire after 3.5s so new blinks are needed
+                tracker['blink_verified'] = False
+                tracker['blinks_count'] = 0
+                tracker['stage'] = 'WAITING_BLINK_1'
+                tracker['history'] = []
 
-        # Add current frame to history
+        # Record openness history
         tracker['history'].append({
             'time': now,
             'openness': openness,
@@ -229,81 +250,112 @@ class LivenessService:
             'bbox': bbox
         })
 
-        if len(tracker['history']) > 15:
+        if len(tracker['history']) > 20:
             tracker['history'].pop(0)
 
-        # Check Dynamic Blink Dip:
-        # A live eye blink consists of: baseline open -> dip (eyelids close) -> reopen
-        if len(tracker['history']) >= 3 and not tracker['blink_verified']:
-            scores = [h['openness'] for h in tracker['history']]
-            baseline_open = float(np.percentile(scores, 75))
-            min_val = float(np.min(scores))
-            min_idx = int(np.argmin(scores))
-            latest = float(scores[-1])
-            dip_amount = baseline_open - min_val
+        # Baseline openness (75th percentile of recent window)
+        scores = [h['openness'] for h in tracker['history']]
+        baseline_open = float(np.percentile(scores, 75))
+        dip = baseline_open - openness
 
-            # Sensitive yet rock-solid anti-spoof:
-            # Detects any dynamic dip >= 0.05 OR absolute closure <= 0.32
-            has_dip = (dip_amount >= 0.05) or (min_val <= 0.32 and baseline_open >= 0.36)
-            reopened = (latest >= baseline_open * 0.75) and (min_idx < len(scores) - 1)
+        # Strict closure & open criteria:
+        # A true eye blink requires closure <= 0.30 OR dip >= 0.12 from baseline >= 0.38
+        is_closed = (openness <= 0.30) or (dip >= 0.12 and baseline_open >= 0.38)
+        is_open = (openness >= 0.38) and (dip <= 0.07)
 
-            if has_dip and reopened:
-                tracker['blink_verified'] = True
+        # --- 2-BLINK STATE MACHINE ---
+        if tracker['stage'] == 'WAITING_BLINK_1':
+            if is_closed and len(tracker['history']) >= 2:
+                tracker['stage'] = 'BLINK_1_CLOSING'
+                logger.info(f"Tracker {track_key}: Blink 1 Closing detected (openness: {openness:.2f}, dip: {dip:.2f})")
+
+        elif tracker['stage'] == 'BLINK_1_CLOSING':
+            if is_open:
+                tracker['blinks_count'] = 1
+                tracker['blink_1_time'] = now
+                tracker['stage'] = 'WAITING_BLINK_2'
+                logger.info(f"Tracker {track_key}: Blink 1 Reopened & CONFIRMED! (1/2)")
+
+        elif tracker['stage'] == 'WAITING_BLINK_2':
+            # Require at least 150ms between blinks to ensure distinct blinks
+            if (now - tracker['blink_1_time']) >= 0.15:
+                if is_closed:
+                    tracker['stage'] = 'BLINK_2_CLOSING'
+                    logger.info(f"Tracker {track_key}: Blink 2 Closing detected (openness: {openness:.2f}, dip: {dip:.2f})")
+
+        elif tracker['stage'] == 'BLINK_2_CLOSING':
+            if is_open:
+                tracker['blinks_count'] = 2
+                tracker['blink_2_time'] = now
                 tracker['verified_at'] = now
-                logger.info(f"Live eye blink confirmed for tracker {track_key} (dip: {dip_amount:.2f}, baseline: {baseline_open:.2f})!")
-
-        # State-machine fallback: saw OPEN -> saw CLOSED/TRANSITION -> saw OPEN
-        if not tracker['blink_verified'] and len(tracker['history']) >= 3:
-            hist_states = [h['state'] for h in tracker['history']]
-            has_open_start = False
-            has_closed = False
-            reopened = False
-            for s in hist_states:
-                if s == 'OPEN' and not has_closed:
-                    has_open_start = True
-                elif (s == 'CLOSED' or s == 'TRANSITION') and has_open_start:
-                    has_closed = True
-                elif s == 'OPEN' and has_closed:
-                    reopened = True
-
-            if reopened:
                 tracker['blink_verified'] = True
-                tracker['verified_at'] = now
-                logger.info(f"Live eye blink confirmed via state machine for {track_key}!")
+                tracker['stage'] = 'VERIFIED'
+                logger.info(f"Tracker {track_key}: Blink 2 Reopened & CONFIRMED! (2/2) LIVE VERIFIED!")
 
-        # Return live status
+        # Generate status and prompt
         if tracker['blink_verified']:
             return {
                 'is_live': True,
                 'liveness_status': 'verified',
+                'blinks_count': 2,
+                'required_blinks': self.REQUIRED_BLINKS,
                 'eye_state': 'verified',
                 'eye_openness': openness,
                 'is_spoof': False,
                 'spoof_reason': None,
-                'prompt': 'Live student verified! (Eye blink confirmed)',
+                'prompt': '2 blinks verified! Attendance confirmed.',
                 'blink_verified': True
             }
-
-        if eye_state == 'CLOSED' or (len(tracker['history']) >= 2 and openness <= 0.32):
+        elif tracker['stage'] == 'BLINK_2_CLOSING':
             return {
                 'is_live': False,
-                'liveness_status': 'blinking',
+                'liveness_status': 'blinking_2',
+                'blinks_count': 1,
+                'required_blinks': self.REQUIRED_BLINKS,
                 'eye_state': 'closing',
                 'eye_openness': openness,
                 'is_spoof': False,
                 'spoof_reason': None,
-                'prompt': 'Blink detected! Re-opening eyes...',
+                'prompt': '2nd blink detected... reopen eyes to confirm (2/2)',
+                'blink_verified': False
+            }
+        elif tracker['stage'] == 'WAITING_BLINK_2':
+            return {
+                'is_live': False,
+                'liveness_status': 'blink_1_done',
+                'blinks_count': 1,
+                'required_blinks': self.REQUIRED_BLINKS,
+                'eye_state': 'open',
+                'eye_openness': openness,
+                'is_spoof': False,
+                'spoof_reason': None,
+                'prompt': '1st blink verified! Please blink 1 more time (Blink 2 of 2)',
+                'blink_verified': False
+            }
+        elif tracker['stage'] == 'BLINK_1_CLOSING':
+            return {
+                'is_live': False,
+                'liveness_status': 'blinking_1',
+                'blinks_count': 0,
+                'required_blinks': self.REQUIRED_BLINKS,
+                'eye_state': 'closing',
+                'eye_openness': openness,
+                'is_spoof': False,
+                'spoof_reason': None,
+                'prompt': '1st blink detected... reopen eyes (1/2)',
                 'blink_verified': False
             }
         else:
             return {
                 'is_live': False,
                 'liveness_status': 'awaiting_blink',
+                'blinks_count': 0,
+                'required_blinks': self.REQUIRED_BLINKS,
                 'eye_state': 'open',
                 'eye_openness': openness,
                 'is_spoof': False,
                 'spoof_reason': None,
-                'prompt': 'Please blink your eyes naturally to mark attendance (Live Check)',
+                'prompt': 'Please blink your eyes 2 times to verify attendance (0/2)',
                 'blink_verified': False
             }
 

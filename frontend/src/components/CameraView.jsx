@@ -143,8 +143,8 @@ export default function CameraView({
 
               const isSpoof = box.liveness?.is_spoof || box.liveness?.liveness_status === 'spoof_detected';
               const isVerified = box.liveness?.liveness_status === 'verified' || box.status === 'marked' || box.liveness?.blink_verified;
-              const isAwaitingBlink = box.liveness?.liveness_status === 'awaiting_blink';
-              const isBlinking = box.liveness?.liveness_status === 'blinking';
+              const blinksCount = box.liveness?.blinks_count || 0;
+              const livenessStatus = box.liveness?.liveness_status || 'awaiting_blink';
               const isRecognized = box.status === 'recognized' || box.recognized;
 
               let borderColor = 'border-amber-400 shadow-amber-400/30';
@@ -160,17 +160,27 @@ export default function CameraView({
               } else if (isVerified) {
                 borderColor = 'border-emerald-500 shadow-emerald-500/50 ring-2 ring-emerald-500/40';
                 badgeBg = 'bg-emerald-600 text-white font-bold';
-                badgeText = `Live Verified | ${box.student?.name || 'Student'}`;
+                badgeText = `2 Blinks Verified (2/2) | ${box.student?.name || 'Student'}`;
                 icon = <CheckCircle2 className="h-3.5 w-3.5 inline mr-1" />;
-              } else if (isBlinking) {
+              } else if (livenessStatus === 'blink_1_done') {
+                borderColor = 'border-sky-400 shadow-sky-400/50 ring-2 ring-sky-400/40 animate-pulse';
+                badgeBg = 'bg-sky-600 text-white font-bold';
+                badgeText = `1st Blink Confirmed (1/2) | Blink 1 More Time!`;
+                icon = <Sparkles className="h-3.5 w-3.5 inline mr-1 animate-spin" />;
+              } else if (livenessStatus === 'blinking_2') {
                 borderColor = 'border-cyan-400 shadow-cyan-400/50 ring-2 ring-cyan-400/40 animate-pulse';
                 badgeBg = 'bg-cyan-600 text-white font-bold';
-                badgeText = `Blinking Detected... | ${box.student?.name || 'Student'}`;
+                badgeText = `2nd Blink Detected... | ${box.student?.name || 'Student'}`;
                 icon = <Sparkles className="h-3.5 w-3.5 inline mr-1 animate-spin" />;
-              } else if (isAwaitingBlink && isRecognized) {
+              } else if (livenessStatus === 'blinking_1') {
+                borderColor = 'border-cyan-400 shadow-cyan-400/50 ring-2 ring-cyan-400/40 animate-pulse';
+                badgeBg = 'bg-cyan-600 text-white font-bold';
+                badgeText = `1st Blink Detected... | ${box.student?.name || 'Student'}`;
+                icon = <Sparkles className="h-3.5 w-3.5 inline mr-1 animate-spin" />;
+              } else if (isRecognized) {
                 borderColor = 'border-amber-400 shadow-amber-400/50 ring-2 ring-amber-400/40';
                 badgeBg = 'bg-amber-500 text-slate-900 font-bold';
-                badgeText = `Blink Eyes to Confirm | ${box.student?.name || 'Student'}`;
+                badgeText = `Blink Eyes Twice (0/2) | ${box.student?.name || 'Student'}`;
                 icon = <Eye className="h-3.5 w-3.5 inline mr-1 animate-bounce" />;
               }
 
@@ -201,22 +211,32 @@ export default function CameraView({
                 {overlayBoxes[0].liveness?.is_spoof ? (
                   <div className="flex items-center gap-2 rounded-full bg-rose-600/90 px-4 py-1.5 text-xs font-bold text-white shadow-xl backdrop-blur animate-pulse">
                     <ShieldAlert className="h-4 w-4" />
-                    <span>Photo or Screen detected! Please face camera directly.</span>
+                    <span>Photo or Screen detected! Live face required (Photo se attendance nahi lagegi).</span>
                   </div>
                 ) : overlayBoxes[0].liveness?.liveness_status === 'verified' || overlayBoxes[0].liveness?.blink_verified ? (
                   <div className="flex items-center gap-2 rounded-full bg-emerald-600/90 px-4 py-1.5 text-xs font-bold text-white shadow-xl backdrop-blur">
                     <CheckCircle2 className="h-4 w-4" />
-                    <span>Live Verified! Eye blink confirmed.</span>
+                    <span>2 Blinks Verified! Attendance Confirmed (2/2)</span>
                   </div>
-                ) : overlayBoxes[0].liveness?.liveness_status === 'blinking' ? (
+                ) : overlayBoxes[0].liveness?.liveness_status === 'blink_1_done' ? (
+                  <div className="flex items-center gap-2 rounded-full bg-sky-600/95 px-4 py-1.5 text-xs font-black text-white shadow-xl backdrop-blur animate-bounce">
+                    <Sparkles className="h-4 w-4" />
+                    <span>1st blink confirmed! Please blink 1 more time (1/2)</span>
+                  </div>
+                ) : overlayBoxes[0].liveness?.liveness_status === 'blinking_2' ? (
                   <div className="flex items-center gap-2 rounded-full bg-cyan-600/90 px-4 py-1.5 text-xs font-bold text-white shadow-xl backdrop-blur animate-pulse">
                     <Sparkles className="h-4 w-4 animate-spin" />
-                    <span>Blink detected! Re-opening eyes to complete...</span>
+                    <span>2nd blink detected! Re-opening eyes to complete (2/2)...</span>
+                  </div>
+                ) : overlayBoxes[0].liveness?.liveness_status === 'blinking_1' ? (
+                  <div className="flex items-center gap-2 rounded-full bg-cyan-600/90 px-4 py-1.5 text-xs font-bold text-white shadow-xl backdrop-blur animate-pulse">
+                    <Sparkles className="h-4 w-4 animate-spin" />
+                    <span>1st blink detected! Re-opening eyes (1/2)...</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 rounded-full bg-amber-500/95 px-4 py-1.5 text-xs font-black text-slate-900 shadow-xl backdrop-blur animate-bounce">
                     <Eye className="h-4 w-4" />
-                    <span>Please blink your eyes naturally to confirm attendance</span>
+                    <span>Please blink your eyes 2 times to verify attendance (0/2)</span>
                   </div>
                 )}
               </div>

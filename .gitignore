@@ -44,3 +44,6 @@ frontend/dist-ssr/
 # OS
 .DS_Store
 Thumbs.db
+
+# Scratch
+scratch/

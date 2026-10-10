@@ -322,10 +322,19 @@ export default function LiveAttendancePage() {
                     <span>Photo Spoof Detected (Rejected - Live Student Required)</span>
                   </span>
                 ) : currentRecognition.awaitingBlink?.length > 0 ? (
-                  <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-bold animate-pulse">
-                    <Eye className="h-4 w-4" />
-                    <span>Live Check: Please blink your eyes naturally (Palak jhapkayen)</span>
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-bold animate-pulse">
+                      <Eye className="h-4 w-4" />
+                      <span>
+                        {currentRecognition.awaitingBlink[0]?.blinksCount === 1
+                          ? '✨ 1st Blink Confirmed! Please blink 1 more time (1/2)'
+                          : 'Live Check: 2 Blinks Required to Mark Attendance (0/2)'}
+                      </span>
+                    </span>
+                    <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-black text-amber-600 dark:text-amber-400">
+                      {currentRecognition.awaitingBlink[0]?.blinksCount || 0}/2 Blinks
+                    </span>
+                  </div>
                 ) : currentRecognition.alreadyMarked?.length > 0 ? (
                   <div className="flex items-center gap-3">
                     <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-semibold">

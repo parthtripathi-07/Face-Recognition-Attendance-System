@@ -130,8 +130,11 @@ export default function StudentPortalPage() {
                   setLastRecognition({
                     type: 'awaiting_blink',
                     student: data.awaitingBlink[0].student,
-                    message: data.awaitingBlink[0].message || 'Please blink your eyes naturally.',
+                    message: data.awaitingBlink[0].message || 'Please blink your eyes 2 times.',
                     eyeState: data.awaitingBlink[0].eyeState,
+                    blinksCount: data.awaitingBlink[0].blinksCount ?? 0,
+                    requiredBlinks: data.awaitingBlink[0].requiredBlinks ?? 2,
+                    livenessStatus: data.awaitingBlink[0].livenessStatus,
                   });
                 } else if (hasAlready) {
                   setLastRecognition({
@@ -397,7 +400,7 @@ export default function StudentPortalPage() {
                       </div>
                       <div>
                         <span className="rounded bg-amber-200/90 dark:bg-amber-900 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
-                          LIVE CHECK: PLEASE BLINK (PALAK JHAPKAYEN)
+                          LIVE CHECK: 2 BLINKS REQUIRED ({lastRecognition.blinksCount || 0}/2)
                         </span>
                         <h4 className="text-base font-extrabold text-slate-900 dark:text-white mt-1">
                           {lastRecognition.student?.name}
@@ -405,13 +408,34 @@ export default function StudentPortalPage() {
                       </div>
                     </div>
 
-                    <div className="pt-2 border-t border-amber-500/20 text-xs space-y-2">
+                    <div className="pt-2 border-t border-amber-500/20 text-xs space-y-3">
                       <p className="text-amber-800 dark:text-amber-300 font-medium leading-relaxed">
-                        Photo se attendance rokne ke liye: <strong>Camera ke samne ek baar palak jhapkayen (Blink your eyes)</strong>.
+                        {(lastRecognition.blinksCount || 0) === 1 ? (
+                          <span>✨ <strong>1st Blink Verified!</strong> Ek baar aur palak jhapkayen (Please blink 1 more time).</span>
+                        ) : (
+                          <span>Photo se attendance rokne ke liye: <strong>Camera ke samne 2 baar palak jhapkayen (Blink 2 times)</strong>.</span>
+                        )}
                       </p>
-                      <div className="flex items-center gap-2 text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-900/50 px-3 py-1.5 rounded-xl">
-                        <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
-                        <span>Eye Detection: Waiting for natural blink...</span>
+
+                      {/* 2-Blink Visual Progress Bar */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <div className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl font-bold text-xs transition-all ${
+                          (lastRecognition.blinksCount || 0) >= 1
+                            ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/25 ring-2 ring-emerald-400'
+                            : 'bg-amber-200/80 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 animate-pulse'
+                        }`}>
+                          <span>1st Blink: {(lastRecognition.blinksCount || 0) >= 1 ? '✓ Confirmed' : 'Waiting...'}</span>
+                        </div>
+
+                        <div className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl font-bold text-xs transition-all ${
+                          (lastRecognition.blinksCount || 0) >= 2
+                            ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/25 ring-2 ring-emerald-400'
+                            : (lastRecognition.blinksCount || 0) === 1
+                            ? 'bg-sky-500 text-white animate-pulse shadow-md'
+                            : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                        }`}>
+                          <span>2nd Blink: {(lastRecognition.blinksCount || 0) >= 2 ? '✓ Confirmed' : 'Waiting...'}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
