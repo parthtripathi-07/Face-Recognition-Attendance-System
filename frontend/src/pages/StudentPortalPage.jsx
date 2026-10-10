@@ -164,11 +164,11 @@ export default function StudentPortalPage() {
       }
 
       if (isMountedRef.current && activeTab === 'camera') {
-        timerId = setTimeout(scanFrame, 160);
+        timerId = setTimeout(scanFrame, 100);
       }
     };
 
-    timerId = setTimeout(scanFrame, 150);
+    timerId = setTimeout(scanFrame, 100);
 
     return () => {
       isMountedRef.current = false;

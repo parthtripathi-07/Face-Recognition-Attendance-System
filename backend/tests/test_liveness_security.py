@@ -201,8 +201,8 @@ def test_tracking_loss_resets_challenge():
     res_b1 = svc.process_face_liveness(img, finfo, student_id=student_id)
     assert res_b1["blinks_count"] == 1
 
-    # Simulate face drop of 0.8 seconds by manually adjusting last_seen
-    svc._trackers[student_id]["last_seen"] -= 0.80
+    # Simulate face drop of 3.0 seconds by manually adjusting last_seen (> 2.5s)
+    svc._trackers[student_id]["last_seen"] -= 3.0
 
     # Face returns
     res_after = svc.process_face_liveness(img, finfo, student_id=student_id)

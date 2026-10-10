@@ -48,6 +48,20 @@ async def mark_attendance(payload: MarkAttendancePayload):
         )
     return result
 
+_REGISTERED_FACES_CACHE = {"timestamp": 0.0, "records": []}
+
+async def get_cached_registered_faces():
+    import time
+    now = time.time()
+    if (now - _REGISTERED_FACES_CACHE["timestamp"]) < 10.0 and _REGISTERED_FACES_CACHE["records"]:
+        return _REGISTERED_FACES_CACHE["records"]
+    faces_coll = db_manager["face_embeddings"]
+    cursor = faces_coll.find({})
+    records = await cursor.to_list(length=1000)
+    _REGISTERED_FACES_CACHE["timestamp"] = now
+    _REGISTERED_FACES_CACHE["records"] = records
+    return records
+
 @router.post("/recognize-and-mark")
 async def recognize_and_mark(payload: RecognizeAndMarkPayload):
     """Real-time convenience endpoint: detects, recognizes, and automatically marks attendance in 1 call."""
@@ -59,9 +73,7 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
             detail=f"Invalid image format: {str(e)}"
         )
 
-    faces_coll = db_manager["face_embeddings"]
-    cursor = faces_coll.find({})
-    registered_faces = await cursor.to_list(length=1000)
+    registered_faces = await get_cached_registered_faces()
 
     threshold = payload.threshold or settings.RECOGNITION_THRESHOLD
     recognition_results = face_service.recognize_frame(img, registered_faces, threshold=threshold)

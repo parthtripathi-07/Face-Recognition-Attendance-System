@@ -83,11 +83,15 @@ export default function CameraView({
     const canvas = canvasRef.current;
     if (video.videoWidth === 0 || video.videoHeight === 0) return null;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // Scale down to max 640px width for fast 8-10 FPS real-time blink detection
+    const maxWidth = 640;
+    const scale = Math.min(1.0, maxWidth / video.videoWidth);
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.85);
+    return canvas.toDataURL('image/jpeg', 0.70);
   };
 
   useEffect(() => {

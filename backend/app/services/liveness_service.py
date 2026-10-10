@@ -106,7 +106,7 @@ class LivenessService:
     def calculate_eye_metrics(self, eye_crop: Optional[np.ndarray]) -> Tuple[float, float, bool, bool]:
         """
         Measures eye openness using horizontal profile (sclera vs pupil contrast valley)
-        and iris texture standard deviation.
+        and iris texture contrast.
         Returns: (openness_score, valley_depth, is_open, is_closed)
         """
         if eye_crop is None or eye_crop.size == 0:
@@ -117,7 +117,7 @@ class LivenessService:
             return 0.50, 20.0, True, False
 
         gray = cv2.cvtColor(eye_crop, cv2.COLOR_BGR2GRAY)
-        mid_y1, mid_y2 = int(h * 0.20), int(h * 0.80)
+        mid_y1, mid_y2 = int(h * 0.15), int(h * 0.85)
         z_w = int(w / 3)
         if z_w < 2 or (mid_y2 - mid_y1) < 2:
             return 0.50, 20.0, True, False
@@ -125,7 +125,7 @@ class LivenessService:
         # Split horizontally: Left sclera | Center pupil/iris | Right sclera
         left_zone = float(np.mean(gray[mid_y1:mid_y2, 0:z_w]))
         center_zone = float(np.mean(gray[mid_y1:mid_y2, z_w:2*z_w]))
-        right_zone = float(np.mean(gray[mid_y1:mid_y2, 2*z_w:3*z_w]))
+        right_zone = float(np.mean(gray[mid_y1:mid_y2, 2*z_w:]))
 
         sclera_avg = (left_zone + right_zone) / 2.0
         valley_depth = max(0.0, sclera_avg - center_zone)
@@ -133,15 +133,15 @@ class LivenessService:
         center_crop = gray[mid_y1:mid_y2, z_w:2*z_w]
         std_center = float(np.std(center_crop))
 
-        v_score = min(1.0, valley_depth / 42.0)
-        std_score = min(1.0, std_center / 32.0)
+        v_score = min(1.0, valley_depth / 35.0)
+        std_score = min(1.0, std_center / 28.0)
         openness = (v_score * 0.65) + (std_score * 0.35)
         openness = float(np.clip(openness, 0.0, 1.0))
 
-        # Open eye: distinct dark pupil valley flanked by brighter sclera
-        is_open = (openness >= 0.40 and valley_depth >= 16.0)
+        # Open eye: distinct dark pupil valley or good contrast
+        is_open = (openness >= 0.30) or (valley_depth >= 10.0)
         # Closed eye: uniform eyelid skin, flat horizontal profile without pupil valley
-        is_closed = (openness <= 0.24 and valley_depth <= 12.0)
+        is_closed = (openness <= 0.26) and (valley_depth <= 9.0)
 
         return openness, valley_depth, is_open, is_closed
 
@@ -321,8 +321,8 @@ class LivenessService:
         tracker["last_seen"] = now
 
         # Challenge Timeout Check:
-        # If active challenge exceeds 9 seconds, reset to prevent stale state
-        if (now - tracker["created_at"]) > 9.0:
+        # If active challenge exceeds 20 seconds, reset to prevent stale state
+        if (now - tracker["created_at"]) > 20.0:
             logger.info(f"[LIVENESS_TRACK] Challenge timed out for {track_key}. Resetting.")
             tracker["created_at"] = now
             tracker["stage"] = "WAITING_BLINK_1"
@@ -330,32 +330,35 @@ class LivenessService:
             tracker["open_frames_streak"] = 0
 
         # Tracking Loss Check:
-        # If face was missing for > 0.55s, challenge is reset!
-        if dt > 0.55:
+        # If face was missing for > 2.5s, challenge is reset!
+        if dt > 2.5:
             logger.warning(f"[LIVENESS_TRACK] Tracking loss for {track_key} (dt={dt:.2f}s). Resetting challenge.")
             tracker["stage"] = "WAITING_BLINK_1"
             tracker["blinks_count"] = 0
             tracker["open_frames_streak"] = 0
 
-        # Centroid Displacement & Stability Check:
+        # Centroid Displacement & Velocity Stability Check:
         pcx, pcy = tracker["last_center"]
         disp = float(np.sqrt((cx - pcx) ** 2 + (cy - pcy) ** 2))
         max_dim = max(10.0, float(max(tracker["last_size"])))
         rel_disp = disp / max_dim
 
-        # Size change ratio
+        # Calculate movement velocity (per second)
+        disp_velocity = disp / max(0.10, dt)
+        rel_velocity = disp_velocity / max_dim
+
         pfw = tracker["last_size"][0]
         size_change = abs(1.0 - (fw / max(1.0, float(pfw))))
 
         tracker["last_center"] = (cx, cy)
         tracker["last_size"] = (fw, fh)
 
-        # Reject shaking phone / unstable tracking:
-        # If relative displacement > 0.12 or size jumped > 25%
-        if rel_disp > 0.12 or size_change > 0.25:
+        # Reject rapid shaking phone / violent movement (high velocity):
+        # A phone shake produces rel_velocity > 1.8 (or rel_disp > 0.40)
+        if (rel_velocity > 1.8 and rel_disp > 0.20) or rel_disp > 0.45 or size_change > 0.40:
             logger.info(
                 f"[LIVENESS_TRACK] Unstable face movement for {track_key}: "
-                f"rel_disp={rel_disp:.2f}, size_change={size_change:.2f} -> Resetting challenge."
+                f"rel_disp={rel_disp:.2f}, rel_velocity={rel_velocity:.2f} -> Resetting challenge."
             )
             tracker["stage"] = "WAITING_BLINK_1"
             tracker["blinks_count"] = 0
@@ -389,41 +392,53 @@ class LivenessService:
                 "blink_verified": False
             }
 
-        # 5. Strict 2-Blink State Machine Transitions
+        # 5. Adaptive Open Baseline and Transitions
+        if "open_baseline" not in tracker:
+            tracker["open_baseline"] = 0.40
+
+        is_eyes_open = is_both_open or (avg_openness >= 0.30) or (avg_valley >= 10.0)
+        if is_eyes_open:
+            tracker["open_baseline"] = max(tracker["open_baseline"], avg_openness)
+
+        openness_dip = tracker["open_baseline"] - avg_openness
+        is_eyes_closed = (
+            is_both_closed
+            or (avg_valley <= 9.0 and avg_openness <= 0.28)
+            or (openness_dip >= 0.10 and tracker["open_baseline"] >= 0.32)
+        )
+
         has_open_baseline = (tracker["open_frames_streak"] >= 1)
-        prev_stage = tracker["stage"]
 
         if tracker["stage"] == "WAITING_BLINK_1":
-            # Genuine eye closure requires verified open baseline + stable sharp face
-            if is_both_closed and has_open_baseline:
+            if is_eyes_closed and has_open_baseline:
                 tracker["stage"] = "BLINK_1_CLOSING"
-                logger.info(f"[LIVENESS_TRANSITION] {track_key}: Blink 1 Closing detected (openness: {avg_openness:.2f}, valley: {avg_valley:.1f})")
+                logger.info(f"[LIVENESS_TRANSITION] {track_key}: Blink 1 Closing detected (openness: {avg_openness:.2f}, dip: {openness_dip:.2f}, valley: {avg_valley:.1f})")
 
         elif tracker["stage"] == "BLINK_1_CLOSING":
-            if is_both_open:
+            if is_eyes_open:
                 tracker["blinks_count"] = 1
                 tracker["blink_1_time"] = now
                 tracker["stage"] = "WAITING_BLINK_2"
                 logger.info(f"[LIVENESS_TRANSITION] {track_key}: Blink 1 Reopened & CONFIRMED! (1/2)")
 
         elif tracker["stage"] == "WAITING_BLINK_2":
-            # Require minimum 200ms gap of confirmed OPEN eyes before Blink 2
-            if (now - tracker["blink_1_time"]) >= 0.20 and has_open_baseline:
-                if is_both_closed:
+            # Require minimum 150ms gap of confirmed OPEN eyes before Blink 2
+            if (now - tracker["blink_1_time"]) >= 0.15 and has_open_baseline:
+                if is_eyes_closed:
                     tracker["stage"] = "BLINK_2_CLOSING"
-                    logger.info(f"[LIVENESS_TRANSITION] {track_key}: Blink 2 Closing detected (openness: {avg_openness:.2f}, valley: {avg_valley:.1f})")
+                    logger.info(f"[LIVENESS_TRANSITION] {track_key}: Blink 2 Closing detected (openness: {avg_openness:.2f}, dip: {openness_dip:.2f}, valley: {avg_valley:.1f})")
 
         elif tracker["stage"] == "BLINK_2_CLOSING":
-            if is_both_open:
+            if is_eyes_open:
                 tracker["blinks_count"] = 2
                 tracker["blink_verified"] = True
                 tracker["stage"] = "VERIFIED"
                 logger.info(f"[LIVENESS_TRANSITION] {track_key}: Blink 2 Reopened & CONFIRMED! (2/2) LIVE VERIFIED!")
 
         # Update open frames streak AFTER state transition logic
-        if is_both_open:
+        if is_eyes_open:
             tracker["open_frames_streak"] += 1
-        elif is_both_closed:
+        elif is_eyes_closed:
             tracker["open_frames_streak"] = 0
 
         # 6. Response Construction & Single-Use Verification
