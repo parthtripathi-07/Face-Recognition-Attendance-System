@@ -177,6 +177,16 @@ export default function CameraView({
                 badgeBg = 'bg-cyan-600 text-white font-bold';
                 badgeText = `1st Blink Detected... | ${box.student?.name || 'Student'}`;
                 icon = <Sparkles className="h-3.5 w-3.5 inline mr-1 animate-spin" />;
+              } else if (livenessStatus === 'unstable_tracking') {
+                borderColor = 'border-amber-500 shadow-amber-500/50 ring-2 ring-amber-500/40 animate-pulse';
+                badgeBg = 'bg-amber-600 text-white font-bold';
+                badgeText = `Face Shaking/Moving | Hold Steady (0/2)`;
+                icon = <Eye className="h-3.5 w-3.5 inline mr-1" />;
+              } else if (livenessStatus === 'motion_blurred') {
+                borderColor = 'border-amber-500 shadow-amber-500/50 ring-2 ring-amber-500/40';
+                badgeBg = 'bg-amber-600 text-white font-bold';
+                badgeText = `Motion Blur | Hold Steady (0/2)`;
+                icon = <Eye className="h-3.5 w-3.5 inline mr-1" />;
               } else if (isRecognized) {
                 borderColor = 'border-amber-400 shadow-amber-400/50 ring-2 ring-amber-400/40';
                 badgeBg = 'bg-amber-500 text-slate-900 font-bold';
@@ -232,6 +242,16 @@ export default function CameraView({
                   <div className="flex items-center gap-2 rounded-full bg-cyan-600/90 px-4 py-1.5 text-xs font-bold text-white shadow-xl backdrop-blur animate-pulse">
                     <Sparkles className="h-4 w-4 animate-spin" />
                     <span>1st blink detected! Re-opening eyes (1/2)...</span>
+                  </div>
+                ) : overlayBoxes[0].liveness?.liveness_status === 'unstable_tracking' ? (
+                  <div className="flex items-center gap-2 rounded-full bg-amber-600/95 px-4 py-1.5 text-xs font-bold text-white shadow-xl backdrop-blur animate-pulse">
+                    <Eye className="h-4 w-4" />
+                    <span>Face moving or shaking! Please hold steady and blink naturally (0/2).</span>
+                  </div>
+                ) : overlayBoxes[0].liveness?.liveness_status === 'motion_blurred' ? (
+                  <div className="flex items-center gap-2 rounded-full bg-amber-600/95 px-4 py-1.5 text-xs font-bold text-white shadow-xl backdrop-blur animate-pulse">
+                    <Eye className="h-4 w-4" />
+                    <span>Image blurred. Please hold steady and blink naturally (0/2).</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 rounded-full bg-amber-500/95 px-4 py-1.5 text-xs font-black text-slate-900 shadow-xl backdrop-blur animate-bounce">

@@ -35,6 +35,7 @@ class CreateSessionPayload(BaseModel):
 
 @router.post("/mark")
 async def mark_attendance(payload: MarkAttendancePayload):
+    logger.info(f"[ATTENDANCE_MANUAL] Manual roll call check-in requested for studentId={payload.studentId}, confidence={payload.confidence}")
     result = await attendance_service.mark_attendance(
         student_id=payload.studentId,
         confidence=payload.confidence,
@@ -94,6 +95,10 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
             # 1. Anti-Spoofing and Liveness Verification
             if settings.LIVENESS_ENABLED:
                 if liveness_data.get("is_spoof"):
+                    logger.warning(
+                        f"[ATTENDANCE_REJECT] Presentation attack / spoof rejected for {st.get('name')} "
+                        f"({st.get('id')}): {liveness_data.get('spoof_reason')}"
+                    )
                     spoof_detected.append({
                         "student": st,
                         "confidence": rec["confidence"],
@@ -103,7 +108,19 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                         "status": "spoof_rejected"
                     })
                     continue
-                elif settings.REQUIRE_EYE_BLINK and not liveness_data.get("is_live"):
+
+                is_verified = (
+                    liveness_data.get("is_live") is True
+                    and liveness_data.get("blink_verified") is True
+                    and liveness_data.get("blinks_count", 0) >= 2
+                )
+
+                if settings.REQUIRE_EYE_BLINK and not is_verified:
+                    logger.info(
+                        f"[ATTENDANCE_AWAIT] Student {st.get('name')} ({st.get('id')}): "
+                        f"Liveness status={liveness_data.get('liveness_status')}, "
+                        f"blinks={liveness_data.get('blinks_count', 0)}/{liveness_data.get('required_blinks', 2)}"
+                    )
                     awaiting_blink.append({
                         "student": st,
                         "confidence": rec["confidence"],
@@ -119,6 +136,11 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                     continue
 
             # 2. Live 2-Blink Verification Passed: Check if already marked today
+            logger.info(
+                f"[ATTENDANCE_DECISION] LIVENESS VERIFIED (2/2 distinct blinks) for {st.get('name')} "
+                f"({st.get('id')}) with recognition confidence {rec['confidence']:.3f}. Checking duplicate."
+            )
+
             existing_query = {"studentId": st["id"], "date": date_str}
             if payload.sessionId:
                 existing_query["sessionId"] = payload.sessionId
@@ -126,6 +148,7 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
 
             if existing and not settings.ALLOW_DUPLICATE_SAME_DAY:
                 liveness_service.reset_student_tracker(st["id"])
+                logger.info(f"[ATTENDANCE_DUPLICATE] Student {st.get('name')} already marked today at {existing.get('time')}.")
                 already_marked.append({
                     "student": st,
                     "confidence": rec["confidence"],
@@ -143,10 +166,14 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                 confidence=rec["confidence"],
                 session_id=payload.sessionId
             )
-            # Reset tracker so no photo can reuse previous verification
+            # Reset tracker immediately so no photo can ever reuse previous verification
             liveness_service.reset_student_tracker(st["id"])
 
             if mark_res.get("success"):
+                logger.info(
+                    f"[ATTENDANCE_SAVED] SUCCESS: Attendance recorded for {st.get('name')} "
+                    f"({st.get('rollNumber')}) at {mark_res['attendance']['time']}"
+                )
                 marked_students.append({
                     "student": st,
                     "confidence": rec["confidence"],
@@ -156,6 +183,7 @@ async def recognize_and_mark(payload: RecognizeAndMarkPayload):
                     "status": "marked"
                 })
             elif mark_res.get("status") == "already_marked":
+                logger.info(f"[ATTENDANCE_ALREADY] Student {st.get('name')} already recorded at {mark_res.get('markedAt')}.")
                 already_marked.append({
                     "student": st,
                     "confidence": rec["confidence"],
